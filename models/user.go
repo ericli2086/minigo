@@ -10,7 +10,7 @@ type User struct {
 
 	Username string `json:"username" gorm:"type:varchar(64);index:i_user_username;uniqueIndex:u_user_username;" allowUpdate:"username"`
 
-	Email    string `json:"email" gorm:"type:varchar(64);index:i_user_email;uniqueIndex:u_user_email;" allowUpdate:"email"`
-				
+	Email string `json:"email" gorm:"type:varchar(64);index:i_user_email;uniqueIndex:u_user_email;" allowUpdate:"email"`
+
 	Password string `json:"-" gorm:"type:varchar(256);" allowUpdate:"password"`
 }

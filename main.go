@@ -4,11 +4,11 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	
-	"minigo/utils"
-	"minigo/models"
+
 	"minigo/controllers"
 	"minigo/middlewares"
+	"minigo/models"
+	"minigo/utils"
 )
 
 func main() {

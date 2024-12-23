@@ -1,16 +1,16 @@
 package controllers
 
 import (
-	"fmt"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
-	"net/url"
-	"net/http"
-	"io/ioutil"
-	"encoding/json"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -83,7 +83,7 @@ func genericList(c *gin.Context, model interface{}) {
 
 	// 是否使用计数器
 	useCounter := true
-	
+
 	// 处理搜索参数
 	searchParam := c.DefaultQuery("search", "")
 	if searchParam != "" {
@@ -93,7 +93,7 @@ func genericList(c *gin.Context, model interface{}) {
 
 		for i := 0; i < modelType.NumField(); i++ {
 			field := modelType.Field(i)
-			
+
 			// 只处理字符串类型的字段
 			if field.Type.Kind() == reflect.String {
 				// 获取字段的数据库列名
@@ -124,7 +124,7 @@ func genericList(c *gin.Context, model interface{}) {
 			useCounter = false
 		}
 	}
-	
+
 	// 处理其他查询参数
 	queryParams := c.Request.URL.Query()
 	for key, values := range queryParams {
@@ -133,7 +133,7 @@ func genericList(c *gin.Context, model interface{}) {
 		}
 
 		value := values[0]
-		
+
 		// 处理模糊查询和精确查询
 		if strings.HasSuffix(key, "_contains") {
 			field := strings.TrimSuffix(key, "_contains")
@@ -198,10 +198,10 @@ func genericCreate(c *gin.Context, model interface{}) {
 	db := utils.GetDB(c, nil)
 
 	// 获取模型类型和指针
-    _, modelPtr, _ := utils.GetModelInfo(model)
+	_, modelPtr, _ := utils.GetModelInfo(model)
 
-    // 解析请求数据
-    context, err := utils.UnbindContext(c)
+	// 解析请求数据
+	context, err := utils.UnbindContext(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	}
@@ -212,13 +212,13 @@ func genericCreate(c *gin.Context, model interface{}) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to bind data to model"})
 			return
 		}
-		
+
 		// 创建记录
 		if err := db.Create(modelPtr).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-    }
+	}
 
 	c.JSON(http.StatusCreated, modelPtr)
 }
@@ -231,8 +231,8 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 	var ids []int
 
 	// 支持 JSON、Form 和 Query 参数
-    switch c.ContentType() {
-    case "application/json":
+	switch c.ContentType() {
+	case "application/json":
 		// 解析 json 格式，形如 {"ids":[1, 2, 3, 4, 5, 6]}
 		var body map[string]interface{}
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -243,17 +243,17 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 		ids = make([]int, len(idsInterface))
 		for i, v := range idsInterface {
 			ids[i] = int(v.(float64))
-		}	
+		}
 	default:
 		// 获取查询参数，形如 ?ids=1,2,3,4,5,6
 		idParams := c.Query("ids")
 		if idParams != "" {
 			// 使用 strings.Split 将参数按逗号分隔
 			idStrings := strings.Split(idParams, ",")
-			
+
 			// 转换为整数切片
 			for _, idStr := range idStrings {
-				id, err := strconv.Atoi(idStr)  // 字符串转换为整数
+				id, err := strconv.Atoi(idStr) // 字符串转换为整数
 				if err != nil {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
 					return
@@ -307,9 +307,9 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 func genericRetrieve(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
 	db := utils.GetDB(c, nil)
-	
+
 	id := c.Param("id")
-	
+
 	// 获取模型类型和指针
 	_, modelPtr, _ := utils.GetModelInfo(model)
 
@@ -331,18 +331,18 @@ func genericRetrieve(c *gin.Context, model interface{}) {
 func genericDelete(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
 	db := utils.GetDB(c, nil)
-	
-    id := c.Param("id")
+
+	id := c.Param("id")
 
 	// 获取模型类型和指针
 	_, modelPtr, _ := utils.GetModelInfo(model)
 
-    // 设置ID
-    result := db.Delete(modelPtr, id)
-    if result.Error != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
-        return
-    }
+	// 设置ID
+	result := db.Delete(modelPtr, id)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("deleted %d", result.RowsAffected)})
 }
@@ -351,7 +351,7 @@ func genericDelete(c *gin.Context, model interface{}) {
 func genericUpdate(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
 	db := utils.GetDB(c, nil)
-	
+
 	// 使用反射检查字段标签，获取允许更新字段列表
 	var allowedUpdateFields []string
 
@@ -365,7 +365,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 			allowedUpdateFields = append(allowedUpdateFields, tag)
 		}
 	}
-	
+
 	// 判断URL路径中是否包含ID，来区分是批量更新还是单一更新
 	if urlPath := c.Param("id"); urlPath == "" {
 		// 处理批量更新
@@ -411,7 +411,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "missing 'id' in object"})
 				return
 			}
-            
+
 			// 仅允许更新特定字段
 			filteredUpdates := make(map[string]interface{})
 			for key, value := range obj {
