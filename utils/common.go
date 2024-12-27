@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -28,13 +28,13 @@ func UnbindContext(c *gin.Context) ([]map[string]interface{}, error) {
 	results := make([]map[string]interface{}, 0)
 
 	// 读取请求体内容
-	body, err := ioutil.ReadAll(c.Request.Body)
+	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read body: %v", err)
 	}
 
 	// 重要：重新设置请求体，因为ReadAll会消耗body
-	c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 
 	// 获取 Content-Type
 	contentType := c.GetHeader("Content-Type")
@@ -331,7 +331,6 @@ func setValue(field reflect.Value, value interface{}) error {
 			return nil
 		}
 		field = field.Elem()
-		val = val.Elem()
 	}
 
 	switch field.Kind() {

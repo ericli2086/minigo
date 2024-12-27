@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -74,6 +74,25 @@ func genericList(c *gin.Context, model interface{}) {
 	// 获取模型类型和指针
 	modelType, modelPtr, tableName := utils.GetModelInfo(model)
 
+	// 使用反射检查字段标签，获取允许更新字段列表
+	var allowedQueryFields []string
+	var allowedOrderFields []string = []string{"id"}
+
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		tag := field.Tag.Get("ctags")
+		if tag != "" {
+			filedName := strings.Split(tag, ",")[0]
+			filedTags := strings.Split(tag, ",")[1:]
+			if filedName != "" && utils.ExistsIn(filedTags, "q") {
+				allowedQueryFields = append(allowedQueryFields, filedName)
+			}
+			if filedName != "" && utils.ExistsIn(filedTags, "o") {
+				allowedOrderFields = append(allowedOrderFields, filedName)
+			}
+		}
+	}
+
 	// 创建反射切片
 	sliceType := reflect.SliceOf(modelType)
 	results := reflect.New(sliceType).Elem()
@@ -131,6 +150,9 @@ func genericList(c *gin.Context, model interface{}) {
 		if key == "page" || key == "page_size" || key == "order" || key == "search" {
 			continue
 		}
+		if !utils.ExistsIn(allowedQueryFields, key) {
+			continue
+		}
 
 		value := values[0]
 
@@ -146,7 +168,7 @@ func genericList(c *gin.Context, model interface{}) {
 
 	// 处理排序参数
 	orderParam := c.DefaultQuery("order", "-id")
-	if orderParam != "" {
+	if orderParam != "" && utils.ExistsIn(allowedOrderFields, orderParam) {
 		// 判断是升序还是降序
 		var orderType string
 		var orderField string
@@ -168,7 +190,7 @@ func genericList(c *gin.Context, model interface{}) {
 
 	// 大表统计直接从计数器表查询，如果查询失败则重新查询总数
 	var total int64
-	if useCounter == true {
+	if useCounter {
 		status := db.Raw("SELECT (counter) FROM counters WHERE name = ?", tableName).Scan(&total)
 		if status.Error != nil {
 			query.Count(&total)
@@ -263,7 +285,7 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 		} else {
 			// 如果没有，解析 form 格式，形如 ids=[1,2,3,4,5,6]
 			// gin默认不解析delete请求体，需要手动解析请求体中的表单数据
-			body, err := ioutil.ReadAll(c.Request.Body)
+			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
 				c.JSON(400, gin.H{"error": "failed to read body"})
 				return
@@ -360,9 +382,13 @@ func genericUpdate(c *gin.Context, model interface{}) {
 
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
-		tag := field.Tag.Get("allowUpdate")
+		tag := field.Tag.Get("ctags")
 		if tag != "" {
-			allowedUpdateFields = append(allowedUpdateFields, tag)
+			filedName := strings.Split(tag, ",")[0]
+			filedTags := strings.Split(tag, ",")[1:]
+			if filedName != "" && utils.ExistsIn(filedTags, "u") {
+				allowedUpdateFields = append(allowedUpdateFields, filedName)
+			}
 		}
 	}
 
@@ -381,7 +407,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 			}
 		} else {
 			// 解析 form 格式，形如 objs=[{},{}]
-			body, err := ioutil.ReadAll(c.Request.Body)
+			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
 				c.JSON(400, gin.H{"error": "failed to read body"})
 				return
