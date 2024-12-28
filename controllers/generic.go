@@ -71,7 +71,7 @@ func genericList(c *gin.Context, model interface{}) {
 	pageSize = min(pageSize, MaxPageSize)
 	offset := (page - 1) * pageSize
 
-	// 获取模型类型和指针
+	// 获取模型反射类型和指针
 	modelType, modelPtr, tableName := utils.GetModelInfo(model)
 
 	// 使用反射检查字段标签，获取允许更新字段列表
@@ -219,7 +219,7 @@ func genericCreate(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
 	db := utils.GetDB(c, nil)
 
-	// 获取模型类型和指针
+	// 获取模型指针
 	_, modelPtr, _ := utils.GetModelInfo(model)
 
 	// 解析请求数据
@@ -312,7 +312,7 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 		return
 	}
 
-	// 获取模型类型和指针
+	// 获取模型指针
 	_, modelPtr, _ := utils.GetModelInfo(model)
 
 	// 批量删除
@@ -377,7 +377,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 	// 使用反射检查字段标签，获取允许更新字段列表
 	var allowedUpdateFields []string
 
-	// 获取模型类型和指针
+	// 获取模型反射类型和指针
 	modelType, modelPtr, _ := utils.GetModelInfo(model)
 
 	for i := 0; i < modelType.NumField(); i++ {

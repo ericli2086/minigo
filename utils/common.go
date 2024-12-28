@@ -154,7 +154,7 @@ func GetModelInfo(model interface{}) (reflect.Type, interface{}, string) {
 	modelType := reflect.TypeOf(model)
 
 	// 检查是否为指针类型
-	if modelType.Kind() == reflect.Ptr {
+	if reflect.ValueOf(model).Kind() == reflect.Ptr {
 		modelType = modelType.Elem()
 	}
 
