@@ -231,7 +231,7 @@ func genericCreate(c *gin.Context, model interface{}) {
 	for i := 0; i < len(context); i++ {
 		// 将 JSON 字节解析到模型指针
 		if err := utils.BindContext(context[i], modelPtr); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to bind data to model"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 			return
 		}
 
@@ -277,7 +277,7 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 			for _, idStr := range idStrings {
 				id, err := strconv.Atoi(idStr) // 字符串转换为整数
 				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id format"})
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ids format"})
 					return
 				}
 				ids = append(ids, id)
@@ -287,12 +287,12 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 			// gin默认不解析delete请求体，需要手动解析请求体中的表单数据
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
-				c.JSON(400, gin.H{"error": "failed to read body"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
 				return
 			}
 			values, err := url.ParseQuery(string(body))
 			if err != nil {
-				c.JSON(400, gin.H{"error": "failed to parse form"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse form"})
 				return
 			}
 			idStrings := values.Get("ids")
@@ -301,7 +301,7 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 			}
 			err = json.Unmarshal([]byte(idStrings), &ids)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid obj format"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ids format"})
 				return
 			}
 		}
@@ -409,18 +409,18 @@ func genericUpdate(c *gin.Context, model interface{}) {
 			// 解析 form 格式，形如 objs=[{},{}]
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
-				c.JSON(400, gin.H{"error": "failed to read body"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
 				return
 			}
 			values, err := url.ParseQuery(string(body))
 			if err != nil {
-				c.JSON(400, gin.H{"error": "failed to parse form"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse form"})
 				return
 			}
 			objStrings := values.Get("objs")
 			err = json.Unmarshal([]byte(objStrings), &objs)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid obj format"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid objs format"})
 				return
 			}
 		}
@@ -434,7 +434,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 		for _, obj := range objs {
 			id, exists := obj["id"]
 			if !exists {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "missing 'id' in object"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "missing 'id' in object list"})
 				return
 			}
 

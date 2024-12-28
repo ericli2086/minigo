@@ -50,7 +50,7 @@ func InitDB(dsn string) *DBUtils {
 		log.Fatalf("unsupported database type: %s", dbType)
 	}
 
-	log.Fatalf("failed to connect to any database with DSN: %s", dsn)
+	log.Fatalf("failed to connect to any database with dsn: %s", dsn)
 	return nil
 }
 
@@ -130,7 +130,7 @@ func (u *DBUtils) createMySQLTriggers(tableName string) {
 		tableName, tableName, tableName)
 
 	if err := u.DB.Exec(triggerSQL).Error; err != nil {
-		log.Fatalf("failed to create MySQL triggers for table %s: %v", tableName, err)
+		log.Fatalf("failed to create mysql triggers for table %s: %v", tableName, err)
 	}
 }
 
@@ -215,7 +215,7 @@ func (u *DBUtils) createPostgresTriggers(tableName string) {
 		tableName, tableName, tableName)
 
 	if err := u.DB.Exec(triggerSQL).Error; err != nil {
-		log.Fatalf("failed to create PostgreSQL triggers for table %s: %v", tableName, err)
+		log.Fatalf("failed to create postgresql triggers for table %s: %v", tableName, err)
 	}
 }
 
@@ -252,7 +252,7 @@ func (u *DBUtils) createSQLiteTriggers(tableName string) {
 		tableName, tableName, tableName, tableName, tableName, tableName, tableName, tableName)
 
 	if err := u.DB.Exec(triggerSQL).Error; err != nil {
-		log.Fatalf("failed to create SQLite triggers for table %s: %v", tableName, err)
+		log.Fatalf("failed to create sqlite triggers for table %s: %v", tableName, err)
 	}
 }
 

@@ -30,7 +30,7 @@ func main() {
 		modelType, modelPtr, tableName := utils.GetModelInfo(model)
 		err := dbutil.DB.AutoMigrate(modelPtr)
 		if err != nil {
-			log.Fatalf("Failed to migrate database: %v", err)
+			log.Fatalf("failed to migrate database: %v", err)
 		}
 
 		// 创建计数器
@@ -40,6 +40,6 @@ func main() {
 		controllers.RegisterGenericRoutes(r, strings.TrimSuffix(tableName, "s"), reflect.Zero(modelType).Interface())
 	}
 
-	log.Println("Server starting on :8080")
+	log.Println("server starting on :8080")
 	r.Run(":8080")
 }
