@@ -14,8 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// GetDB 获取当前上下文中的事务或全局数据库实例
-func GetDB(c *gin.Context, db *gorm.DB) *gorm.DB {
+// GetCtxDB 获取当前上下文中的事务或全局数据库实例
+func GetCtxDB(c *gin.Context, db *gorm.DB) *gorm.DB {
 	tx, exists := c.Get("tx")
 	if exists {
 		return tx.(*gorm.DB)
@@ -172,7 +172,7 @@ func GetModelInfo(model interface{}) (reflect.Type, interface{}, string) {
 		if modelType.Kind() == reflect.Ptr {
 			typeName = modelType.Elem().Name()
 		}
-		// 转换为蛇形命名并加上 s 后缀
+		// 转换为蛇形命名
 		runes := []rune(typeName)
 		for i := 0; i < len(runes); i++ {
 			if i > 0 && unicode.IsUpper(runes[i]) {
@@ -180,7 +180,13 @@ func GetModelInfo(model interface{}) (reflect.Type, interface{}, string) {
 			}
 			tableName += strings.ToLower(string(runes[i]))
 		}
-		tableName += "s"
+		// TODO： 破坏了utils包解藕，待后续优化
+		if instanceDB != nil && !instanceDB.config.SingularTable {
+			tableName += "s"
+		}
+		if instanceDB != nil && instanceDB.config.TablePrefix != "" {
+			tableName = instanceDB.config.TablePrefix + tableName
+		}
 	}
 
 	return modelType, modelPtr, tableName

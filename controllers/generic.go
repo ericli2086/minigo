@@ -62,7 +62,7 @@ func RegisterGenericRoutes(r *gin.Engine, resourceName string, model interface{}
 // 通用列表查询
 func genericList(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetDB(c, nil)
+	db := utils.GetCtxDB(c, nil)
 
 	// 分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -168,7 +168,7 @@ func genericList(c *gin.Context, model interface{}) {
 
 	// 处理排序参数
 	orderParam := c.DefaultQuery("order", "-id")
-	if orderParam != "" && utils.ExistsIn(allowedOrderFields, orderParam) {
+	if orderParam != "" && utils.ExistsIn(allowedOrderFields, strings.ReplaceAll(orderParam, "-", "")) {
 		// 判断是升序还是降序
 		var orderType string
 		var orderField string
@@ -217,7 +217,7 @@ func genericList(c *gin.Context, model interface{}) {
 // 通用资源创建
 func genericCreate(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetDB(c, nil)
+	db := utils.GetCtxDB(c, nil)
 
 	// 获取模型指针
 	_, modelPtr, _ := utils.GetModelInfo(model)
@@ -248,7 +248,7 @@ func genericCreate(c *gin.Context, model interface{}) {
 // 通用批量删除
 func genericBatchDelete(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetDB(c, nil)
+	db := utils.GetCtxDB(c, nil)
 
 	var ids []int
 
@@ -328,7 +328,7 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 // 通用单个资源获取
 func genericRetrieve(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetDB(c, nil)
+	db := utils.GetCtxDB(c, nil)
 
 	id := c.Param("id")
 
@@ -352,7 +352,7 @@ func genericRetrieve(c *gin.Context, model interface{}) {
 // 通用单个资源删除
 func genericDelete(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetDB(c, nil)
+	db := utils.GetCtxDB(c, nil)
 
 	id := c.Param("id")
 
@@ -372,7 +372,7 @@ func genericDelete(c *gin.Context, model interface{}) {
 // 通用资源更新
 func genericUpdate(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetDB(c, nil)
+	db := utils.GetCtxDB(c, nil)
 
 	// 使用反射检查字段标签，获取允许更新字段列表
 	var allowedUpdateFields []string

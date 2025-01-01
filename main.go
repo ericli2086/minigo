@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 	"reflect"
-	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"minigo/controllers"
 	"minigo/middlewares"
@@ -14,32 +14,40 @@ import (
 )
 
 func main() {
-	dsn := "test.db"
+	logger := utils.GetLogger()
+	db := utils.GetDB("test.db").SetLogger(logger)
 
-	// 连接数据库
-	dbutil := utils.InitDB(dsn)
+	for i := 0; i < 15; i++ {
+		logger.Info("Info message")
+		logger.Warn("Warn message")
+		logger.Error("Error message")
+		logger.Debug("Debug message")
+		logger.WithTraceID("trace-abc123").Info("Info message")
+		logger.WithTraceID("trace-abc234").Info("创建用户", zap.String("username", "test"))
+	}
+	// logger.Fatal("Fatal message")
 
 	// 设置路由
 	r := gin.Default()
 
 	// 注册事务中间件
-	r.Use(middlewares.TransactionMiddleware(dbutil.DB))
+	r.Use(middlewares.TransactionMiddleware(db.DB))
 
 	for _, model := range []interface{}{models.User{}} {
 		// 迁移数据库
 		modelType, modelPtr, tableName := utils.GetModelInfo(model)
-		err := dbutil.DB.AutoMigrate(modelPtr)
+		err := db.DB.AutoMigrate(modelPtr)
 		if err != nil {
 			log.Fatalf("failed to migrate database: %v", err)
 		}
 
 		// 创建计数器
-		dbutil.CreateCounter4Table(tableName)
+		utils.CreateCounter4Table(db, tableName)
 
 		// 注册路由
-		controllers.RegisterGenericRoutes(r, strings.TrimSuffix(tableName, "s"), reflect.Zero(modelType).Interface())
+		controllers.RegisterGenericRoutes(r, tableName, reflect.Zero(modelType).Interface())
 	}
 
-	log.Println("server starting on :8080")
-	r.Run(":8080")
+	log.Println("server starting on :38081")
+	r.Run(":38081")
 }
