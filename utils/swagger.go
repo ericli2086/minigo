@@ -180,7 +180,7 @@ paths:
                 items:
                   $ref: "#/definitions/%s"
     post:
-      summary: Create %s
+      summary: Batch Create %s
       description: Create new %s (single or batch)
       parameters:
         - in: body
@@ -272,7 +272,7 @@ paths:
           name: body
           required: true
           schema:
-            $ref: "#/definitions/%sUpdate"
+            $ref: "#/definitions/%sSingleUpdate"
       responses:
         200:
           description: Successfully updated
