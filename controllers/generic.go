@@ -260,11 +260,12 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 		if err := c.ShouldBindJSON(&body); err != nil {
 			break
 		}
-
-		idsInterface := body["ids"].([]interface{})
-		ids = make([]int, len(idsInterface))
-		for i, v := range idsInterface {
-			ids[i] = int(v.(float64))
+		if body["ids"] != nil {
+			idsInterface := body["ids"].([]interface{})
+			ids = make([]int, len(idsInterface))
+			for i, v := range idsInterface {
+				ids[i] = int(v.(float64))
+			}
 		}
 	default:
 		// 获取查询参数，形如 ?ids=1,2,3,4,5,6
