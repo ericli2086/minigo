@@ -14,7 +14,7 @@ import (
 
 func main() {
 	logger := utils.GetLogger()
-	db := utils.GetDB("test.db").SetLogger(logger)
+	db := utils.GetDataBase("test.db").SetLogger(logger)
 
 	// 测试日志
 	// logger.Info("Info message")

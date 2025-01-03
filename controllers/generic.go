@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"minigo/utils"
@@ -62,7 +63,7 @@ func RegisterGenericRoutes(r *gin.Engine, resourceName string, model interface{}
 // 通用列表查询
 func genericList(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetCtxDB(c, nil)
+	db := utils.GetDbByCtx(c)
 
 	// 分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -202,7 +203,9 @@ func genericList(c *gin.Context, model interface{}) {
 	// 执行分页查询
 	err := query.Offset(offset).Limit(pageSize).Find(results.Addr().Interface()).Error
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		logger := utils.GetLogger()
+		logger.WithTraceID(c.GetString("trace_id")).Error("failed to query records", zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
 
@@ -217,7 +220,7 @@ func genericList(c *gin.Context, model interface{}) {
 // 通用资源创建
 func genericCreate(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetCtxDB(c, nil)
+	db := utils.GetDbByCtx(c)
 
 	// 获取模型指针
 	_, modelPtr, _ := utils.GetModelInfo(model)
@@ -225,19 +228,30 @@ func genericCreate(c *gin.Context, model interface{}) {
 	// 解析请求数据
 	context, err := utils.UnbindContext(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		logger := utils.GetLogger()
+		logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse context", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 	}
 
 	for i := 0; i < len(context); i++ {
+		// 清空指针
+		_, modelPtr, _ = utils.GetModelInfo(model)
+
 		// 将 JSON 字节解析到模型指针
 		if err := utils.BindContext(context[i], modelPtr); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse context", zap.Error(err))
+			c.Error(errors.New(err.Error()))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 
 		// 创建记录
 		if err := db.Create(modelPtr).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to create record", zap.Error(err))
+			c.Error(errors.New(err.Error()))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 	}
@@ -248,7 +262,7 @@ func genericCreate(c *gin.Context, model interface{}) {
 // 通用批量删除
 func genericBatchDelete(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetCtxDB(c, nil)
+	db := utils.GetDbByCtx(c)
 
 	var ids []int
 
@@ -278,7 +292,9 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 			for _, idStr := range idStrings {
 				id, err := strconv.Atoi(idStr) // 字符串转换为整数
 				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ids format"})
+					logger := utils.GetLogger()
+					logger.WithTraceID(c.GetString("trace_id")).Error("failed to convert string to int", zap.Error(err))
+					c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 					return
 				}
 				ids = append(ids, id)
@@ -288,12 +304,16 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 			// gin默认不解析delete请求体，需要手动解析请求体中的表单数据
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("failed to read body", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 			values, err := url.ParseQuery(string(body))
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse form"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse form", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 			idStrings := values.Get("ids")
@@ -302,14 +322,18 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 			}
 			err = json.Unmarshal([]byte(idStrings), &ids)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ids format"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("invalid ids format", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 		}
 	}
 
 	if len(ids) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ids format"})
+		logger := utils.GetLogger()
+		logger.WithTraceID(c.GetString("trace_id")).Error("ids is empty")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 		return
 	}
 
@@ -319,7 +343,10 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 	// 批量删除
 	result := db.Delete(modelPtr, ids)
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		logger := utils.GetLogger()
+		logger.WithTraceID(c.GetString("trace_id")).Error("failed to delete records", zap.Error(result.Error))
+		c.Error(errors.New(result.Error.Error()))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 		return
 	}
 
@@ -329,7 +356,7 @@ func genericBatchDelete(c *gin.Context, model interface{}) {
 // 通用单个资源获取
 func genericRetrieve(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetCtxDB(c, nil)
+	db := utils.GetDbByCtx(c)
 
 	id := c.Param("id")
 
@@ -338,12 +365,14 @@ func genericRetrieve(c *gin.Context, model interface{}) {
 
 	result := db.First(modelPtr, id)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "resource not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
 
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		logger := utils.GetLogger()
+		logger.WithTraceID(c.GetString("trace_id")).Error("failed to query record", zap.Error(result.Error))
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
 
@@ -353,7 +382,7 @@ func genericRetrieve(c *gin.Context, model interface{}) {
 // 通用单个资源删除
 func genericDelete(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetCtxDB(c, nil)
+	db := utils.GetDbByCtx(c)
 
 	id := c.Param("id")
 
@@ -363,7 +392,10 @@ func genericDelete(c *gin.Context, model interface{}) {
 	// 设置ID
 	result := db.Delete(modelPtr, id)
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		logger := utils.GetLogger()
+		logger.WithTraceID(c.GetString("trace_id")).Error("failed to delete record", zap.Error(result.Error))
+		c.Error(errors.New(result.Error.Error()))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 		return
 	}
 
@@ -373,7 +405,7 @@ func genericDelete(c *gin.Context, model interface{}) {
 // 通用资源更新
 func genericUpdate(c *gin.Context, model interface{}) {
 	// 获取数据库实例（自动绑定到事务中）
-	db := utils.GetCtxDB(c, nil)
+	db := utils.GetDbByCtx(c)
 
 	// 使用反射检查字段标签，获取允许更新字段列表
 	var allowedUpdateFields []string
@@ -394,7 +426,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 	}
 
 	// 判断URL路径中是否包含ID，来区分是批量更新还是单一更新
-	if urlPath := c.Param("id"); urlPath == "" {
+	if urlPathID := c.Param("id"); urlPathID == "" {
 		// 处理批量更新
 		var objs []map[string]interface{}
 
@@ -410,24 +442,32 @@ func genericUpdate(c *gin.Context, model interface{}) {
 			// 解析 form 格式，形如 objs=[{},{}]
 			body, err := io.ReadAll(c.Request.Body)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("failed to read body", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 			values, err := url.ParseQuery(string(body))
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "failed to parse form"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse form", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 			objStrings := values.Get("objs")
 			err = json.Unmarshal([]byte(objStrings), &objs)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid objs format"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("invalid objs format", zap.Error(err))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 		}
 
 		if len(objs) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid objs format"})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("objs is empty")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 
@@ -435,7 +475,10 @@ func genericUpdate(c *gin.Context, model interface{}) {
 		for _, obj := range objs {
 			id, exists := obj["id"]
 			if !exists {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "missing 'id' in object list"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("missing 'id' in object list")
+				c.Error(errors.New("missing 'id' in object list"))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 
@@ -447,12 +490,18 @@ func genericUpdate(c *gin.Context, model interface{}) {
 				}
 			}
 			if len(filteredUpdates) == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "no available fields to update"})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("no available fields to update")
+				c.Error(errors.New("no available fields to update"))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 
 			if err := db.Model(modelPtr).Where("id = ?", id).Updates(filteredUpdates).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				logger := utils.GetLogger()
+				logger.WithTraceID(c.GetString("trace_id")).Error("failed to update record", zap.Error(err))
+				c.Error(errors.New(err.Error()))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 				return
 			}
 		}
@@ -463,10 +512,14 @@ func genericUpdate(c *gin.Context, model interface{}) {
 		id := c.Param("id") // 获取路径中的 ID
 		contexts, err := utils.UnbindContext(c)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse context", zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 		}
 		if len(contexts) != 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("invalid request body")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 
@@ -478,13 +531,18 @@ func genericUpdate(c *gin.Context, model interface{}) {
 			}
 		}
 		if len(filteredUpdates) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "no available fields to update"})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("no available fields to update")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 
 		// 执行单一更新
 		if err := db.Model(modelPtr).Where("id = ?", id).Updates(filteredUpdates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to update record", zap.Error(err))
+			c.Error(errors.New(err.Error()))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 

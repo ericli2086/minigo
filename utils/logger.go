@@ -51,12 +51,12 @@ var defaultLogConfig = LogConfig{
 
 var (
 	instanceLog *Logger
-	once        sync.Once
+	onceLog     sync.Once
 )
 
 // GetLogger 获取日志实例，支持多种初始化方式
 func GetLogger(args ...string) *Logger {
-	once.Do(func() {
+	onceLog.Do(func() {
 		var config *LogConfig
 		var err error
 

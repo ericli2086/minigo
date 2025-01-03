@@ -85,17 +85,16 @@ var defaultDBConfig = DBConfig{
 }
 
 var (
-	instanceDB *Database
-	instances  = make(map[string]*Database)
-	muDB       sync.RWMutex
+	instanceDbs = make(map[string]*Database)
+	muDB        sync.RWMutex
 )
 
-// GetDB 获取数据库实例
-func GetDB(args ...string) *Database {
+// GetDataBase 获取数据库实例
+func GetDataBase(args ...string) *Database {
 	key := strings.Join(args, ":")
 
 	muDB.RLock()
-	if db, exists := instances[key]; exists {
+	if db, exists := instanceDbs[key]; exists {
 		muDB.RUnlock()
 		return db
 	}
@@ -105,7 +104,7 @@ func GetDB(args ...string) *Database {
 	defer muDB.Unlock()
 
 	// 双重检查
-	if db, exists := instances[key]; exists {
+	if db, exists := instanceDbs[key]; exists {
 		return db
 	}
 
@@ -151,10 +150,8 @@ func GetDB(args ...string) *Database {
 		panic(fmt.Sprintf("failed to initialize database: %v", err))
 	}
 
-	instances[key] = db
-	if instanceDB == nil {
-		instanceDB = db
-	}
+	instanceDbs[key] = db
+
 	return db
 }
 

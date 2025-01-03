@@ -14,11 +14,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// GetCtxDB 获取当前上下文中的事务或全局数据库实例
-func GetCtxDB(c *gin.Context, db *gorm.DB) *gorm.DB {
+// GetDbByCtx 获取当前上下文中的事务或全局数据库实例
+func GetDbByCtx(c *gin.Context) *gorm.DB {
+	var db *gorm.DB
+
 	tx, exists := c.Get("tx")
 	if exists {
-		return tx.(*gorm.DB)
+		db = tx.(*gorm.DB)
 	}
 	return db
 }
@@ -180,12 +182,20 @@ func GetModelInfo(model interface{}) (reflect.Type, interface{}, string) {
 			}
 			tableName += strings.ToLower(string(runes[i]))
 		}
-		// TODO： 破坏了utils包解藕，待后续优化
-		if instanceDB != nil && !instanceDB.config.SingularTable {
-			tableName += "s"
-		}
-		if instanceDB != nil && instanceDB.config.TablePrefix != "" {
-			tableName = instanceDB.config.TablePrefix + tableName
+		// 如果有数据库表配置，则添加前缀和后缀。
+		for _, instanceDB := range instanceDbs {
+			var skip = false
+			if instanceDB != nil && !instanceDB.config.SingularTable {
+				tableName += "s"
+				skip = true
+			}
+			if instanceDB != nil && instanceDB.config.TablePrefix != "" {
+				tableName = instanceDB.config.TablePrefix + tableName
+				skip = true
+			}
+			if skip {
+				break
+			}
 		}
 	}
 
