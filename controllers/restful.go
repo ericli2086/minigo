@@ -19,8 +19,8 @@ import (
 	"minigo/utils"
 )
 
-// 通用路由注册函数
-func RegisterGenericRoutes(r *gin.Engine, resourceName string, model interface{}) {
+// 通用restful注册函数
+func RegisterRestfulRoutes(r *gin.Engine, resourceName string, model interface{}) {
 	// 创建路由组
 	group := r.Group(resourceName)
 
