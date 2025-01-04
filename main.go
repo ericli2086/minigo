@@ -38,7 +38,7 @@ func main() {
 		controllers.RegisterRestfulRoutes(r, "/api/"+tableName, reflect.Zero(modelType).Interface())
 	}
 
-	// 创建 AutoGraphQL 实例并配置
+	// 创建 GraphQL 实例
 	autoGraphQL := controllers.NewGraphQL(db.DB, controllers.Config{
 		EnableQuery:    true,
 		EnableMutation: true,
@@ -67,6 +67,9 @@ func main() {
 		swaggerGen.GenerateSwaggerDocs(tableName, reflect.Zero(modelType).Interface())
 	}
 	swaggerGen.RegisterSwaggerRoute(r)
+
+	// GraphiQL界面
+	r.StaticFile("/graphiql.html", "./graphiql.html")
 
 	log.Println("server starting on :38080")
 	r.Run(":38080")
