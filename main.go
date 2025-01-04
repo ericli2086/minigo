@@ -16,20 +16,14 @@ func main() {
 	logger := utils.GetLogger("config.yaml", "develop.logger")
 	db := utils.GetDataBase("config.yaml", "develop.database").SetLogger(logger)
 
-	// 测试日志
-	// logger.Info("Info message")
-	// logger.Warn("Warn message")
-	// logger.Error("Error message")
-	// logger.Debug("Debug message")
-	// logger.WithTraceID("trace-abc123").Info("Info message")
-	// logger.WithTraceID("trace-abc234").Info("创建用户", zap.String("username", "test"))
-	// logger.Fatal("Fatal message")
-
 	// 设置路由
 	r := gin.Default()
 
-	// 注册事务中间件
+	// 注册 transaction 中间件
 	r.Use(middlewares.TransactionMiddleware(db.DB))
+
+	// 注册 trace_id 中间件
+	r.Use(middlewares.TraceIDMiddleware("1"))
 
 	for _, model := range []interface{}{models.User{}} {
 		modelType, modelPtr, tableName := utils.GetModelInfo(model)
