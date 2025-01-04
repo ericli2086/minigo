@@ -48,7 +48,6 @@ func main() {
 	})
 	for _, model := range []interface{}{models.User{}} {
 		_, _, tableName := utils.GetModelInfo(model)
-
 		err := autoGraphQL.RegisterGraphql4Table(tableName)
 		if err != nil {
 			log.Fatalf("failed to register %s table: %v", tableName, err)

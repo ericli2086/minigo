@@ -380,7 +380,7 @@ func (ag *AutoGraphQL) buildSchema() error {
 		// 查询字段
 		if ag.config.EnableQuery {
 			// 单个查询
-			queryFields[tableName] = &graphql.Field{
+			queryFields["retrieve"+cases.Title(language.English).String(tableName)] = &graphql.Field{
 				Type: objectType,
 				Args: graphql.FieldConfigArgument{
 					"id": &graphql.ArgumentConfig{
@@ -392,7 +392,7 @@ func (ag *AutoGraphQL) buildSchema() error {
 
 			// 列表查询
 			if ag.config.EnableList {
-				queryFields[tableName+"List"] = &graphql.Field{
+				queryFields["list"+cases.Title(language.English).String(tableName)] = &graphql.Field{
 					Type: graphql.NewList(objectType),
 					Args: graphql.FieldConfigArgument{
 						"limit": &graphql.ArgumentConfig{
@@ -412,7 +412,7 @@ func (ag *AutoGraphQL) buildSchema() error {
 							Description: "SQL ORDER BY clause",
 						},
 					},
-					Resolve: ag.generateListResolver(tableName, meta),
+					Resolve: ag.generateListResolver(tableName),
 				}
 			}
 		}
@@ -565,7 +565,7 @@ func (ag *AutoGraphQL) generateFieldResolver(tableName string, meta *TableMeta) 
 }
 
 // generateListResolver 生成列表解析器
-func (ag *AutoGraphQL) generateListResolver(tableName string, meta *TableMeta) graphql.FieldResolveFn {
+func (ag *AutoGraphQL) generateListResolver(tableName string) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
 		tx := getTransaction(p.Context, ag.db)
 
