@@ -13,8 +13,8 @@ import (
 )
 
 func main() {
-	logger := utils.GetLogger()
-	db := utils.GetDataBase("test.db").SetLogger(logger)
+	logger := utils.GetLogger("config.yaml", "develop.logger")
+	db := utils.GetDataBase("config.yaml", "develop.database").SetLogger(logger)
 
 	// 测试日志
 	// logger.Info("Info message")

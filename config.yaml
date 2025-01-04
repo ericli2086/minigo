@@ -1,0 +1,25 @@
+develop:
+  database:
+    type: sqlite
+    charset: utf8mb4
+    maxIdleConns: 10
+    maxOpenConns: 100
+    connMaxLifetime: 3600
+    connMaxIdleTime: 1800
+    singularTable: false
+    tablePrefix: ""
+    slowThreshold: 50
+    logLevel: error
+    sqlite:
+      file: test.db
+
+  logger:
+    level: error
+    directory: logs
+    separateLevel: false
+    maxSize: 100
+    maxBackups: 7
+    maxAge: 30
+    compress: true
+    console: true
+    traceID: trace_id

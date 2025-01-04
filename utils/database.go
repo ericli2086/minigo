@@ -127,12 +127,6 @@ func GetDataBase(args ...string) *Database {
 			panic("unsupported database type")
 		}
 	case 2:
-		// 使用配置文件，默认段
-		config, err = loadDBConfig(args[0], "database")
-		if err != nil {
-			panic(fmt.Sprintf("failed to initialize database: %v", err))
-		}
-	case 3:
 		// 使用配置文件，指定段
 		config, err = loadDBConfig(args[0], args[1])
 		if err != nil {
@@ -401,6 +395,7 @@ func Transaction(db *gorm.DB, fc func(tx *gorm.DB) error) error {
 // CreateCounter4Table 为指定表创建触发计数器
 func CreateCounter4Table(db *Database, tableName string) {
 	sql := `
+        DROP TABLE IF EXISTS counters;
         CREATE TABLE counters (
             name VARCHAR(255) PRIMARY KEY,
             counter INT NOT NULL DEFAULT 0
