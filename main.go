@@ -1,7 +1,9 @@
 package main
 
 import (
+	"embed"
 	"log"
+	"net/http"
 	"reflect"
 
 	"github.com/gin-gonic/gin"
@@ -11,6 +13,9 @@ import (
 	"minigo/models"
 	"minigo/utils"
 )
+
+//go:embed graphiql.html
+var graphiqlFs embed.FS
 
 func main() {
 	logger := utils.GetLogger("config.yaml", "develop.logger")
@@ -69,7 +74,9 @@ func main() {
 	swaggerGen.RegisterSwaggerRoute(r)
 
 	// GraphiQL界面
-	r.StaticFile("/graphiql.html", "./graphiql.html")
+	r.GET("/graphiql.html", func(c *gin.Context) {
+		c.FileFromFS("graphiql.html", http.FS(graphiqlFs))
+	})
 
 	log.Println("server starting on :38080")
 	r.Run(":38080")
