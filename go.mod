@@ -3,6 +3,7 @@ module minigo
 go 1.23.4
 
 require (
+	github.com/andybalholm/brotli v1.1.1
 	github.com/bwmarrin/snowflake v0.3.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/glebarez/sqlite v1.11.0

@@ -226,6 +226,59 @@ func ExistsIn[T comparable](slice []T, item T) bool {
 	return false
 }
 
+// 不规则名词映射
+var irregularNouns = map[string]string{
+	"children": "child",
+	"men":      "man",
+	"women":    "woman",
+	"teeth":    "tooth",
+	"feet":     "foot",
+	"mice":     "mouse",
+	"people":   "person",
+}
+
+// IsPlural 判断单词是否为复数
+func IsPlural(word string) bool {
+	return ToSingular(word) != word
+}
+
+// ToSingular 将复数形式转换为单数
+func ToSingular(word string) string {
+	// 转换为小写处理
+	wordLower := strings.ToLower(word)
+
+	// 检查是否是不规则名词
+	if singular, exists := irregularNouns[wordLower]; exists {
+		return singular
+	}
+
+	// 处理常见的复数规则
+	switch {
+	// 处理以 ies 结尾的情况
+	case strings.HasSuffix(wordLower, "ies"):
+		return word[:len(word)-3] + "y"
+
+	// 处理特殊的 es 结尾情况
+	case strings.HasSuffix(wordLower, "sses"),
+		strings.HasSuffix(wordLower, "xes"),
+		strings.HasSuffix(wordLower, "ches"),
+		strings.HasSuffix(wordLower, "shes"):
+		return word[:len(word)-2]
+
+	// 处理一般的 es 结尾
+	case strings.HasSuffix(wordLower, "es"):
+		return word[:len(word)-1]
+
+	// 处理一般的 s 结尾
+	case strings.HasSuffix(wordLower, "s") &&
+		!strings.HasSuffix(wordLower, "ss"): // 排除 pass 这样的词
+		return word[:len(word)-1]
+	}
+
+	// 不是复数形式，返回原词
+	return word
+}
+
 // 类型转换辅助函数
 func ToInt64(v interface{}) (int64, bool) {
 	switch val := v.(type) {

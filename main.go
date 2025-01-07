@@ -27,6 +27,7 @@ func main() {
 	// 注册中间件
 	r.Use(middlewares.TransactionMiddleware(db.DB))
 	r.Use(middlewares.TraceIDMiddleware("1"))
+	r.Use(middlewares.Brotli(nil))
 
 	for _, model := range []interface{}{models.User{}} {
 		modelType, modelPtr, tableName := utils.GetModelInfo(model)
@@ -40,7 +41,7 @@ func main() {
 		utils.CreateCounter4Table(db, tableName)
 
 		// 注册路由
-		controllers.RegisterRestfulRoutes(r, "/api/"+tableName, reflect.Zero(modelType).Interface())
+		controllers.RegisterRestfulRoutes(r, "/api/"+utils.ToSingular(tableName), reflect.Zero(modelType).Interface())
 	}
 
 	// 创建 GraphQL 实例
@@ -49,11 +50,11 @@ func main() {
 		EnableMutation: true,
 		EnableList:     true,
 		BatchSize:      10,
-		MaxLimit:       10000,
+		MaxLimit:       1000,
 	})
 	for _, model := range []interface{}{models.User{}} {
-		_, _, tableName := utils.GetModelInfo(model)
-		err := autoGraphQL.RegisterGraphql4Table(tableName)
+		modelType, _, tableName := utils.GetModelInfo(model)
+		err := autoGraphQL.RegisterGraphql4Table(utils.ToSingular(tableName), reflect.Zero(modelType).Interface())
 		if err != nil {
 			log.Fatalf("failed to register %s table: %v", tableName, err)
 		}
@@ -69,7 +70,7 @@ func main() {
 	})
 	for _, model := range []interface{}{models.User{}} {
 		modelType, _, tableName := utils.GetModelInfo(model)
-		swaggerGen.GenerateSwaggerDocs(tableName, reflect.Zero(modelType).Interface())
+		swaggerGen.GenerateSwaggerDocs(utils.ToSingular(tableName), reflect.Zero(modelType).Interface())
 	}
 	swaggerGen.RegisterSwaggerRoute(r)
 

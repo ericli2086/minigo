@@ -68,7 +68,7 @@ func genericList(c *gin.Context, model interface{}) {
 	// 分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
-	const MaxPageSize = 10000
+	const MaxPageSize = 1000
 	pageSize = min(pageSize, MaxPageSize)
 	offset := (page - 1) * pageSize
 
@@ -231,6 +231,7 @@ func genericCreate(c *gin.Context, model interface{}) {
 		logger := utils.GetLogger()
 		logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse context", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
 	}
 
 	for i := 0; i < len(context); i++ {
@@ -515,6 +516,7 @@ func genericUpdate(c *gin.Context, model interface{}) {
 			logger := utils.GetLogger()
 			logger.WithTraceID(c.GetString("trace_id")).Error("failed to parse context", zap.Error(err))
 			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+			return
 		}
 		if len(contexts) != 1 {
 			logger := utils.GetLogger()

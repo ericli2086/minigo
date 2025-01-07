@@ -1,15 +1,25 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
+	"github.com/graphql-go/graphql/language/parser"
+	"go.uber.org/zap"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"gorm.io/gorm"
+
+	"minigo/utils"
 )
 
 // AutoGraphQL 核心引擎
@@ -18,6 +28,29 @@ type AutoGraphQL struct {
 	registry *TypeRegistry
 	schema   graphql.Schema
 	config   Config
+}
+
+// Config 配置选项
+type Config struct {
+	EnableQuery    bool
+	EnableMutation bool
+	EnableList     bool
+	BatchSize      int
+	MaxLimit       int
+}
+
+// NewGraphQL 创建新的AutoGraphQL实例
+func NewGraphQL(db *gorm.DB, config Config) *AutoGraphQL {
+	return &AutoGraphQL{
+		db: db,
+		registry: &TypeRegistry{
+			db:         db,
+			types:      make(map[string]*graphql.Object),
+			inputTypes: make(map[string]*graphql.InputObject),
+			tableMeta:  make(map[string]*TableMeta),
+		},
+		config: config,
+	}
 }
 
 // TypeRegistry 类型注册中心
@@ -42,6 +75,7 @@ type ColumnMeta struct {
 	Type     string
 	Nullable bool
 	IsKey    bool
+	Tags     map[string]string // 自定义标签
 }
 
 // RelationMeta 关系元数据
@@ -53,45 +87,24 @@ type RelationMeta struct {
 	ReferenceKey string
 }
 
-// Config 配置选项
-type Config struct {
-	EnableQuery    bool
-	EnableMutation bool
-	EnableList     bool
-	BatchSize      int
-	MaxLimit       int
-}
+// RegisterGraphql4Table 注册表到类型注册中心
+func (ag *AutoGraphQL) RegisterGraphql4Table(resourceName string, model interface{}) error {
+	_, _, tableName := utils.GetModelInfo(model)
 
-// New 创建新的AutoGraphQL实例
-func NewGraphQL(db *gorm.DB, config Config) *AutoGraphQL {
-	return &AutoGraphQL{
-		db: db,
-		registry: &TypeRegistry{
-			db:         db,
-			types:      make(map[string]*graphql.Object),
-			inputTypes: make(map[string]*graphql.InputObject),
-			tableMeta:  make(map[string]*TableMeta),
-		},
-		config: config,
-	}
-}
-
-// RegisterTable 注册表
-func (ag *AutoGraphQL) RegisterGraphql4Table(tableName string) error {
-	err := ag.registry.RegisterTable(tableName)
+	err := ag.registry.RegisterTable(tableName, model)
 	if err != nil {
 		return err
 	}
 
 	// 生成GraphQL类型
-	ag.registry.GenerateGraphQLType(tableName)
-	ag.registry.GenerateInputType(tableName)
+	ag.registry.GenerateGraphQLType(tableName, resourceName)
+	ag.registry.GenerateInputType(tableName, resourceName)
 
-	return ag.buildSchema()
+	return ag.buildSchema(resourceName)
 }
 
 // RegisterTable 注册表到类型注册中心
-func (r *TypeRegistry) RegisterTable(tableName string) error {
+func (r *TypeRegistry) RegisterTable(tableName string, model interface{}) error {
 	// 获取数据库类型
 	dialectName := r.db.Dialector.Name()
 
@@ -170,6 +183,7 @@ func (r *TypeRegistry) RegisterTable(tableName string) error {
 			Type:     col.DataType,
 			Nullable: col.IsNullable == "YES",
 			IsKey:    col.ColumnKey == "PRI",
+			Tags:     parseTags(col.ColumnName, model), // 解析自定义标签
 		})
 
 		if col.ColumnKey == "PRI" {
@@ -246,6 +260,88 @@ func (r *TypeRegistry) RegisterTable(tableName string) error {
 	return nil
 }
 
+// parseTags 解析自定义标签
+func parseTags(columnName string, model interface{}) map[string]string {
+	tags := make(map[string]string)
+
+	// 获取模型反射类型和指针
+	modelType, _, _ := utils.GetModelInfo(model)
+
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		if utils.Camel2Snake(field.Name) == columnName {
+			tags["json"] = field.Tag.Get("json")
+			tags["ctags"] = field.Tag.Get("ctags")
+		}
+	}
+
+	return tags
+}
+
+// GenerateGraphQLType 生成GraphQL对象类型
+func (r *TypeRegistry) GenerateGraphQLType(tableName string, resourceName ...string) *graphql.Object {
+	if existingType, ok := r.types[tableName]; ok {
+		return existingType
+	}
+
+	meta := r.tableMeta[tableName]
+	fields := graphql.Fields{}
+
+	// 生成普通字段
+	for _, col := range meta.Columns {
+		if col.Tags["json"] != "-" { // 排除不展示的字段
+			fields[col.Name] = &graphql.Field{
+				Type: r.mapSQLTypeToGraphQL(col.Type, col.Nullable),
+			}
+		}
+	}
+
+	// 生成关系字段
+	for _, relation := range meta.Relations {
+		fields[relation.Name] = &graphql.Field{
+			Type:    r.getRelationType(relation),
+			Resolve: r.generateRelationResolver(relation),
+		}
+	}
+
+	caser := cases.Title(language.English)
+	objectType := graphql.NewObject(graphql.ObjectConfig{
+		// Name:   caser.String(tableName),
+		Name:   caser.String(resourceName[0]),
+		Fields: fields,
+	})
+
+	r.types[tableName] = objectType
+	return objectType
+}
+
+// GenerateInputType 生成GraphQL输入类型
+func (r *TypeRegistry) GenerateInputType(tableName string, resourceName ...string) *graphql.InputObject {
+	if existingType, ok := r.inputTypes[tableName]; ok {
+		return existingType
+	}
+
+	meta := r.tableMeta[tableName]
+	fields := graphql.InputObjectConfigFieldMap{}
+
+	for _, col := range meta.Columns {
+		if !col.IsKey && col.Tags["json"] != "-" { // 排除主键和不展示的字段
+			fields[col.Name] = &graphql.InputObjectFieldConfig{
+				Type: r.mapSQLTypeToGraphQL(col.Type, true), // 输入字段总是可空的
+			}
+		}
+	}
+
+	caser := cases.Title(language.English)
+	inputType := graphql.NewInputObject(graphql.InputObjectConfig{
+		Name:   caser.String(resourceName[0]) + "Input",
+		Fields: fields,
+	})
+
+	r.inputTypes[tableName] = inputType
+	return inputType
+}
+
 // mapSQLTypeToGraphQL 将SQL类型映射为GraphQL类型
 func (r *TypeRegistry) mapSQLTypeToGraphQL(sqlType string, nullable bool) graphql.Type {
 	var baseType graphql.Type
@@ -268,67 +364,6 @@ func (r *TypeRegistry) mapSQLTypeToGraphQL(sqlType string, nullable bool) graphq
 		return graphql.NewNonNull(baseType)
 	}
 	return baseType
-}
-
-// GenerateGraphQLType 生成GraphQL对象类型
-func (r *TypeRegistry) GenerateGraphQLType(tableName string) *graphql.Object {
-	if existingType, ok := r.types[tableName]; ok {
-		return existingType
-	}
-
-	meta := r.tableMeta[tableName]
-	fields := graphql.Fields{}
-
-	// 生成普通字段
-	for _, col := range meta.Columns {
-		fields[col.Name] = &graphql.Field{
-			Type: r.mapSQLTypeToGraphQL(col.Type, col.Nullable),
-		}
-	}
-
-	// 生成关系字段
-	for _, relation := range meta.Relations {
-		fields[relation.Name] = &graphql.Field{
-			Type:    r.getRelationType(relation),
-			Resolve: r.generateRelationResolver(relation),
-		}
-	}
-
-	caser := cases.Title(language.English)
-	objectType := graphql.NewObject(graphql.ObjectConfig{
-		Name:   caser.String(tableName),
-		Fields: fields,
-	})
-
-	r.types[tableName] = objectType
-	return objectType
-}
-
-// GenerateInputType 生成GraphQL输入类型
-func (r *TypeRegistry) GenerateInputType(tableName string) *graphql.InputObject {
-	if existingType, ok := r.inputTypes[tableName]; ok {
-		return existingType
-	}
-
-	meta := r.tableMeta[tableName]
-	fields := graphql.InputObjectConfigFieldMap{}
-
-	for _, col := range meta.Columns {
-		if !col.IsKey { // 排除主键
-			fields[col.Name] = &graphql.InputObjectFieldConfig{
-				Type: r.mapSQLTypeToGraphQL(col.Type, true), // 输入字段总是可空的
-			}
-		}
-	}
-
-	caser := cases.Title(language.English)
-	inputType := graphql.NewInputObject(graphql.InputObjectConfig{
-		Name:   caser.String(tableName) + "Input",
-		Fields: fields,
-	})
-
-	r.inputTypes[tableName] = inputType
-	return inputType
 }
 
 // getRelationType 获取关系类型
@@ -369,7 +404,7 @@ func (r *TypeRegistry) generateRelationResolver(relation RelationMeta) graphql.F
 }
 
 // buildSchema 构建GraphQL schema
-func (ag *AutoGraphQL) buildSchema() error {
+func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 	queryFields := graphql.Fields{}
 	mutationFields := graphql.Fields{}
 
@@ -380,7 +415,7 @@ func (ag *AutoGraphQL) buildSchema() error {
 		// 查询字段
 		if ag.config.EnableQuery {
 			// 单个查询
-			queryFields["retrieve"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			queryFields[resourceName] = &graphql.Field{
 				Type: objectType,
 				Args: graphql.FieldConfigArgument{
 					"id": &graphql.ArgumentConfig{
@@ -392,27 +427,23 @@ func (ag *AutoGraphQL) buildSchema() error {
 
 			// 列表查询
 			if ag.config.EnableList {
-				queryFields["list"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+				queryFields[resourceName+"s"] = &graphql.Field{
 					Type: graphql.NewList(objectType),
 					Args: graphql.FieldConfigArgument{
-						"limit": &graphql.ArgumentConfig{
+						"pageSize": &graphql.ArgumentConfig{
 							Type:        graphql.Int,
-							Description: fmt.Sprintf("Maximum number of records (default: %d, max: %d)", ag.config.BatchSize, ag.config.MaxLimit),
+							Description: fmt.Sprintf("Maximum number of perpage (default: %d, max: %d)", ag.config.BatchSize, ag.config.MaxLimit),
 						},
-						"offset": &graphql.ArgumentConfig{
+						"page": &graphql.ArgumentConfig{
 							Type:        graphql.Int,
-							Description: "Number of records to skip",
+							Description: "Number of page",
 						},
-						"where": &graphql.ArgumentConfig{
-							Type:        graphql.String,
-							Description: "SQL WHERE clause",
-						},
-						"order": &graphql.ArgumentConfig{
+						"orderBy": &graphql.ArgumentConfig{
 							Type:        graphql.String,
 							Description: "SQL ORDER BY clause",
 						},
 					},
-					Resolve: ag.generateListResolver(tableName),
+					Resolve: ag.generateListResolver(tableName, meta),
 				}
 			}
 		}
@@ -430,6 +461,17 @@ func (ag *AutoGraphQL) buildSchema() error {
 				Resolve: ag.generateMutationResolver("create", tableName, meta),
 			}
 
+			// 批量创建
+			mutationFields["createBulk"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+				Type: graphql.NewList(objectType),
+				Args: graphql.FieldConfigArgument{
+					"inputs": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(inputType))),
+					},
+				},
+				Resolve: ag.generateBulkMutationResolver("create", tableName, meta),
+			}
+
 			// 更新
 			mutationFields["update"+cases.Title(language.English).String(tableName)] = &graphql.Field{
 				Type: objectType,
@@ -444,6 +486,17 @@ func (ag *AutoGraphQL) buildSchema() error {
 				Resolve: ag.generateMutationResolver("update", tableName, meta),
 			}
 
+			// 批量更新
+			mutationFields["updateBulk"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+				Type: graphql.NewList(objectType),
+				Args: graphql.FieldConfigArgument{
+					"inputs": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(inputType))),
+					},
+				},
+				Resolve: ag.generateBulkMutationResolver("update", tableName, meta),
+			}
+
 			// 删除
 			mutationFields["delete"+cases.Title(language.English).String(tableName)] = &graphql.Field{
 				Type: graphql.Boolean,
@@ -453,6 +506,17 @@ func (ag *AutoGraphQL) buildSchema() error {
 					},
 				},
 				Resolve: ag.generateMutationResolver("delete", tableName, meta),
+			}
+
+			// 批量删除
+			mutationFields["deleteBulk"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+				Type: graphql.Boolean,
+				Args: graphql.FieldConfigArgument{
+					"ids": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.ID))),
+					},
+				},
+				Resolve: ag.generateBulkMutationResolver("delete", tableName, meta),
 			}
 		}
 	}
@@ -488,76 +552,107 @@ func (ag *AutoGraphQL) buildSchema() error {
 // Handler GraphQL请求处理器
 func (ag *AutoGraphQL) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 读取请求体内容
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to execute graphql", zap.Error(err))
+		}
+
+		// 重要：重新设置请求体，因为ReadAll会消耗body
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
 		var request struct {
 			Query         string                 `json:"query"`
 			OperationName string                 `json:"operationName"`
 			Variables     map[string]interface{} `json:"variables"`
 		}
 
+		// 在执行前将gin.Context存入context中
+		ctx := context.WithValue(c.Request.Context(), "ginContext", c)
+		ctx = context.WithValue(ctx, "requestBody", body)
+
 		if err := c.BindJSON(&request); err != nil {
-			c.JSON(400, gin.H{"error": err.Error()})
-			return
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to execute graphql", zap.Error(err))
 		}
 
-		// 判断是否为mutation操作
-		isMutation := strings.HasPrefix(strings.TrimSpace(request.Query), "mutation")
+		// 已经由中间件统一处理事务，仅需在报错时触发中间件自动回滚即可
+		result := graphql.Do(graphql.Params{
+			Schema:         ag.schema,
+			RequestString:  request.Query,
+			OperationName:  request.OperationName,
+			VariableValues: request.Variables,
+			Context:        ctx,
+		})
 
-		var result *graphql.Result
-		if isMutation {
-			// 开启事务
-			tx := ag.db.Begin()
-			if tx.Error != nil {
-				c.JSON(500, gin.H{"error": "Failed to start transaction"})
-				return
-			}
-
-			ctx := context.WithValue(c.Request.Context(), "tx", tx)
-			result = graphql.Do(graphql.Params{
-				Schema:         ag.schema,
-				RequestString:  request.Query,
-				OperationName:  request.OperationName,
-				VariableValues: request.Variables,
-				Context:        ctx,
-			})
-
-			if len(result.Errors) > 0 {
-				tx.Rollback()
-			} else {
-				if err := tx.Commit().Error; err != nil {
-					tx.Rollback()
-					c.JSON(500, gin.H{"error": "Failed to commit transaction"})
-					return
-				}
-			}
-		} else {
-			result = graphql.Do(graphql.Params{
-				Schema:         ag.schema,
-				RequestString:  request.Query,
-				OperationName:  request.OperationName,
-				VariableValues: request.Variables,
-				Context:        c.Request.Context(),
-			})
-		}
-
-		statusCode := 200
 		if len(result.Errors) > 0 {
-			statusCode = 400
+			var errMsgs []string
+			for _, err := range result.Errors {
+				errMsgs = append(errMsgs, err.Message)
+			}
+			errors := errors.New(strings.Join(errMsgs, ";"))
+			logger := utils.GetLogger()
+			logger.WithTraceID(c.GetString("trace_id")).Error("failed to do graphql", zap.Error(errors))
+			c.Error(errors)
 		}
 
-		c.JSON(statusCode, result)
+		// GraphQL 的官方规范确实规定，无论请求是成功还是失败，HTTP 响应的状态码 始终是 200
+		c.JSON(http.StatusOK, result)
 	}
 }
 
 // generateFieldResolver 生成字段解析器
 func (ag *AutoGraphQL) generateFieldResolver(tableName string, meta *TableMeta) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		tx := getTransaction(p.Context, ag.db)
-		id := p.Args["id"]
+		var reqestBody interface{}
 		result := make(map[string]interface{})
 
-		err := tx.Table(tableName).Where(meta.PrimaryKey+" = ?", id).Take(&result).Error
+		ctx := p.Context
+		tx := getTransaction(ctx, ag.db)
+
+		if body, ok := ctx.Value("requestBody").([]byte); ok {
+			if err := json.Unmarshal(body, &reqestBody); err != nil {
+				return result, fmt.Errorf("failed to parse json body: %v", err)
+			}
+		}
+
+		// 检查 requestBody 是否为 map 类型
+		queryMap, ok := reqestBody.(map[string]interface{})
+		if !ok {
+			return result, fmt.Errorf("invalid request body")
+		}
+
+		// 获取 query 字符串
+		queryString, ok := queryMap["query"].(string)
+		if !ok {
+			return result, fmt.Errorf("query string not found in request body")
+		}
+
+		// 提取字段
+		fields, err := extractSelectedFields(queryString)
 		if err != nil {
-			return nil, err
+			return result, fmt.Errorf("failed to parse query: %v", err)
+		}
+
+		id := p.Args["id"]
+
+		var softDelete = false
+		for name, meta := range ag.registry.tableMeta {
+			for _, column := range meta.Columns {
+				if name == tableName && column.Name == "deleted_at" {
+					softDelete = true
+				}
+			}
+		}
+
+		if softDelete {
+			err = tx.Table(tableName).Select(fields).Where(meta.PrimaryKey+"=? AND deleted_at=0", id).Take(&result).Error
+		} else {
+			err = tx.Table(tableName).Select(fields).Where(meta.PrimaryKey+"=?", id).Take(&result).Error
+		}
+		if err != nil {
+			return result, err
 		}
 
 		return result, nil
@@ -565,35 +660,117 @@ func (ag *AutoGraphQL) generateFieldResolver(tableName string, meta *TableMeta) 
 }
 
 // generateListResolver 生成列表解析器
-func (ag *AutoGraphQL) generateListResolver(tableName string) graphql.FieldResolveFn {
+func (ag *AutoGraphQL) generateListResolver(tableName string, meta *TableMeta) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		tx := getTransaction(p.Context, ag.db)
+		var results []map[string]interface{}
+		var reqestBody interface{}
 
-		limit := ag.config.BatchSize
-		if p.Args["limit"] != nil {
-			limit = p.Args["limit"].(int)
-			if limit > ag.config.MaxLimit {
-				limit = ag.config.MaxLimit
+		_ = meta
+
+		ctx := p.Context
+		tx := getTransaction(ctx, ag.db)
+		if body, ok := ctx.Value("requestBody").([]byte); ok {
+			if err := json.Unmarshal(body, &reqestBody); err != nil {
+				return results, fmt.Errorf("failed to parse json body: %v", err)
 			}
 		}
 
-		offset := 0
-		if p.Args["offset"] != nil {
-			offset = p.Args["offset"].(int)
+		// 检查 requestBody 是否为 map 类型
+		queryMap, ok := reqestBody.(map[string]interface{})
+		if !ok {
+			return results, fmt.Errorf("invalid request body")
+		}
+
+		// 获取 query 字符串
+		queryString, ok := queryMap["query"].(string)
+		if !ok {
+			return results, fmt.Errorf("query string not found in request body")
+		}
+
+		// 提取字段
+		fields, err := extractSelectedFields(queryString)
+		if err != nil {
+			return results, fmt.Errorf("failed to parse query: %v", err)
+		}
+
+		pageSize := ag.config.BatchSize
+		if p.Args["pageSize"] != nil {
+			pageSize = p.Args["pageSize"].(int)
+			if pageSize > ag.config.MaxLimit {
+				pageSize = ag.config.MaxLimit
+			}
+		}
+
+		page := 1
+		if p.Args["page"] != nil {
+			page = p.Args["page"].(int)
 		}
 
 		query := tx.Table(tableName)
 
-		if where, ok := p.Args["where"].(string); ok && where != "" {
-			query = query.Where(where)
+		// 使用反射检查字段标签，获取允许更新字段列表
+		var softDelete = false
+		var allowedQueryFields []string
+		var allowedOrderFields []string = []string{"id"}
+		for name, meta := range ag.registry.tableMeta {
+			for _, column := range meta.Columns {
+				if name == tableName && column.Name == "deleted_at" {
+					softDelete = true
+				}
+				tag := column.Tags["ctags"]
+				if tag != "" {
+					filedName := strings.Split(tag, ",")[0]
+					filedTags := strings.Split(tag, ",")[1:]
+					if filedName != "" && utils.ExistsIn(filedTags, "q") {
+						allowedQueryFields = append(allowedQueryFields, filedName)
+					}
+					if filedName != "" && utils.ExistsIn(filedTags, "o") {
+						allowedOrderFields = append(allowedOrderFields, filedName)
+					}
+				}
+			}
+		}
+		_ = allowedQueryFields
+
+		// if where, ok := p.Args["where"].(string); ok && where != "" {
+		// 	strings.Contains(where, "LIKE")
+		// 	strings.Split(where, "like")
+		// 	if softDelete {
+		// 		query = query.Where(where + " AND deleted_at=0 ")
+		// 	} else {
+		// 		query = query.Where(where)
+		// 	}
+		// } else {
+		if softDelete {
+			query = query.Where("deleted_at=0")
+		}
+		// }
+
+		if orderBy, ok := p.Args["orderBy"].(string); ok && orderBy != "" {
+			if utils.ExistsIn(allowedOrderFields, strings.ReplaceAll(orderBy, "-", "")) {
+				// 判断是升序还是降序
+				var orderType string
+				var orderField string
+
+				if strings.HasPrefix(orderBy, "-") {
+					// 降序
+					orderField = orderBy[1:]
+					orderType = "DESC"
+				} else {
+					// 升序
+					orderField = orderBy
+					orderType = "ASC"
+				}
+
+				// 构建排序查询
+				orderQuery := fmt.Sprintf("%s %s", orderField, orderType)
+				query = query.Order(orderQuery)
+			}
+		} else {
+			query = query.Order("id DESC")
 		}
 
-		if order, ok := p.Args["order"].(string); ok && order != "" {
-			query = query.Order(order)
-		}
-
-		var results []map[string]interface{}
-		err := query.Limit(limit).Offset(offset).Find(&results).Error
+		err = query.Select(fields).Limit(pageSize).Offset((page - 1) * pageSize).Find(&results).Error
 		if err != nil {
 			return nil, err
 		}
@@ -632,10 +809,124 @@ func (ag *AutoGraphQL) generateMutationResolver(operation string, tableName stri
 	}
 }
 
+// generateBulkMutationResolver 生成批量修改解析器
+func (ag *AutoGraphQL) generateBulkMutationResolver(operation string, tableName string, meta *TableMeta) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		tx := getTransaction(p.Context, ag.db)
+
+		switch operation {
+		case "create":
+			inputs := p.Args["inputs"].([]interface{})
+			var results []map[string]interface{}
+			for _, input := range inputs {
+				result := make(map[string]interface{})
+				err := tx.Table(tableName).Create(input).Scan(&result).Error
+				if err != nil {
+					return nil, err
+				}
+				results = append(results, result)
+			}
+			return results, nil
+
+		case "update":
+			inputs := p.Args["inputs"].([]interface{})
+			var results []map[string]interface{}
+			for _, input := range inputs {
+				inputMap := input.(map[string]interface{})
+				id := inputMap[meta.PrimaryKey]
+				result := make(map[string]interface{})
+				err := tx.Table(tableName).Where(meta.PrimaryKey+" = ?", id).Updates(inputMap).Scan(&result).Error
+				if err != nil {
+					return nil, err
+				}
+				results = append(results, result)
+			}
+			return results, nil
+
+		case "delete":
+			ids := p.Args["ids"].([]interface{})
+			for _, id := range ids {
+				err := tx.Table(tableName).Where(meta.PrimaryKey+" = ?", id).Delete(nil).Error
+				if err != nil {
+					return false, err
+				}
+			}
+			return true, nil
+
+		default:
+			return nil, fmt.Errorf("unknown operation: %s", operation)
+		}
+	}
+}
+
 // getTransaction 获取事务对象
 func getTransaction(ctx context.Context, db *gorm.DB) *gorm.DB {
-	if tx, ok := ctx.Value("tx").(*gorm.DB); ok {
-		return tx
+	if ginCtx, ok := ctx.Value("ginContext").(*gin.Context); ok {
+		return utils.GetDbByCtx(ginCtx)
 	}
+
 	return db
 }
+
+// extractSelectedFields 解析 GraphQL 查询字符串
+func extractSelectedFields(query string) ([]string, error) {
+	astDoc, err := parser.Parse(parser.ParseParams{
+		Source: query,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var fields []string
+
+	// 遍历 AST 节点
+	for _, def := range astDoc.Definitions {
+		if opDef, ok := def.(*ast.OperationDefinition); ok {
+			// 直接获取第一个查询的字段
+			if len(opDef.SelectionSet.Selections) > 0 {
+				if field, ok := opDef.SelectionSet.Selections[0].(*ast.Field); ok {
+					// 获取查询中的字段
+					for _, subSelection := range field.SelectionSet.Selections {
+						if subField, ok := subSelection.(*ast.Field); ok {
+							fields = append(fields, subField.Name.Value)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return fields, nil
+}
+
+// extractSelectedFields 解析 GraphQL 查询字符串
+// func extractSelectedFields(query string) ([]string, error) {
+// 	astDoc, err := parser.Parse(parser.ParseParams{
+// 		Source: query,
+// 	})
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	var fields []string
+
+// 	// 遍历 AST 节点
+// 	for _, def := range astDoc.Definitions {
+// 		if opDef, ok := def.(*ast.OperationDefinition); ok {
+// 			for _, selection := range opDef.SelectionSet.Selections {
+// 				if field, ok := selection.(*ast.Field); ok {
+// 					if field.Name.Value == "users" {
+// 						// 获取 users 查询中的字段
+// 						for _, subSelection := range field.SelectionSet.Selections {
+// 							if subField, ok := subSelection.(*ast.Field); ok {
+// 								fields = append(fields, subField.Name.Value)
+// 							}
+// 						}
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	return fields, nil
+// }
