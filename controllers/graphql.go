@@ -422,13 +422,23 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 						Type: graphql.NewNonNull(graphql.ID),
 					},
 				},
-				Resolve: ag.generateFieldResolver(tableName, meta),
+				Resolve: ag.generateFieldResolver(resourceName, tableName, meta),
 			}
 
 			// 列表查询
 			if ag.config.EnableList {
 				queryFields[resourceName+"s"] = &graphql.Field{
-					Type: graphql.NewList(objectType),
+					Type: graphql.NewObject(graphql.ObjectConfig{
+						Name: cases.Title(language.English).String(resourceName) + "s",
+						Fields: graphql.Fields{
+							"items": &graphql.Field{
+								Type: graphql.NewList(objectType),
+							},
+							"total": &graphql.Field{
+								Type: graphql.Int,
+							},
+						},
+					}),
 					Args: graphql.FieldConfigArgument{
 						"pageSize": &graphql.ArgumentConfig{
 							Type:        graphql.Int,
@@ -443,7 +453,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 							Description: "SQL ORDER BY clause",
 						},
 					},
-					Resolve: ag.generateListResolver(tableName, meta),
+					Resolve: ag.generateListResolver(resourceName+"s", tableName, meta),
 				}
 			}
 		}
@@ -603,36 +613,15 @@ func (ag *AutoGraphQL) Handler() gin.HandlerFunc {
 }
 
 // generateFieldResolver 生成字段解析器
-func (ag *AutoGraphQL) generateFieldResolver(tableName string, meta *TableMeta) graphql.FieldResolveFn {
+func (ag *AutoGraphQL) generateFieldResolver(queryName string, tableName string, meta *TableMeta) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		var reqestBody interface{}
-		result := make(map[string]interface{})
-
 		ctx := p.Context
 		tx := getTransaction(ctx, ag.db)
 
-		if body, ok := ctx.Value("requestBody").([]byte); ok {
-			if err := json.Unmarshal(body, &reqestBody); err != nil {
-				return result, fmt.Errorf("failed to parse json body: %v", err)
-			}
-		}
-
-		// 检查 requestBody 是否为 map 类型
-		queryMap, ok := reqestBody.(map[string]interface{})
-		if !ok {
-			return result, fmt.Errorf("invalid request body")
-		}
-
-		// 获取 query 字符串
-		queryString, ok := queryMap["query"].(string)
-		if !ok {
-			return result, fmt.Errorf("query string not found in request body")
-		}
-
 		// 提取字段
-		fields, err := extractSelectedFields(queryString)
+		fields, err := getSelectedFields(ctx, queryName)
 		if err != nil {
-			return result, fmt.Errorf("failed to parse query: %v", err)
+			return nil, fmt.Errorf("failed to parse query: %v", err)
 		}
 
 		id := p.Args["id"]
@@ -646,6 +635,7 @@ func (ag *AutoGraphQL) generateFieldResolver(tableName string, meta *TableMeta) 
 			}
 		}
 
+		result := make(map[string]interface{})
 		if softDelete {
 			err = tx.Table(tableName).Select(fields).Where(meta.PrimaryKey+"=? AND deleted_at=0", id).Take(&result).Error
 		} else {
@@ -660,37 +650,16 @@ func (ag *AutoGraphQL) generateFieldResolver(tableName string, meta *TableMeta) 
 }
 
 // generateListResolver 生成列表解析器
-func (ag *AutoGraphQL) generateListResolver(tableName string, meta *TableMeta) graphql.FieldResolveFn {
+func (ag *AutoGraphQL) generateListResolver(queryName string, tableName string, meta *TableMeta) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		var results []map[string]interface{}
-		var reqestBody interface{}
-
 		_ = meta
-
 		ctx := p.Context
 		tx := getTransaction(ctx, ag.db)
-		if body, ok := ctx.Value("requestBody").([]byte); ok {
-			if err := json.Unmarshal(body, &reqestBody); err != nil {
-				return results, fmt.Errorf("failed to parse json body: %v", err)
-			}
-		}
-
-		// 检查 requestBody 是否为 map 类型
-		queryMap, ok := reqestBody.(map[string]interface{})
-		if !ok {
-			return results, fmt.Errorf("invalid request body")
-		}
-
-		// 获取 query 字符串
-		queryString, ok := queryMap["query"].(string)
-		if !ok {
-			return results, fmt.Errorf("query string not found in request body")
-		}
 
 		// 提取字段
-		fields, err := extractSelectedFields(queryString)
+		fields, err := getSelectedFields(ctx, queryName)
 		if err != nil {
-			return results, fmt.Errorf("failed to parse query: %v", err)
+			return nil, fmt.Errorf("failed to parse query: %v", err)
 		}
 
 		pageSize := ag.config.BatchSize
@@ -710,7 +679,6 @@ func (ag *AutoGraphQL) generateListResolver(tableName string, meta *TableMeta) g
 
 		// 使用反射检查字段标签，获取允许更新字段列表
 		var softDelete = false
-		var allowedQueryFields []string
 		var allowedOrderFields []string = []string{"id"}
 		for name, meta := range ag.registry.tableMeta {
 			for _, column := range meta.Columns {
@@ -721,30 +689,16 @@ func (ag *AutoGraphQL) generateListResolver(tableName string, meta *TableMeta) g
 				if tag != "" {
 					filedName := strings.Split(tag, ",")[0]
 					filedTags := strings.Split(tag, ",")[1:]
-					if filedName != "" && utils.ExistsIn(filedTags, "q") {
-						allowedQueryFields = append(allowedQueryFields, filedName)
-					}
 					if filedName != "" && utils.ExistsIn(filedTags, "o") {
 						allowedOrderFields = append(allowedOrderFields, filedName)
 					}
 				}
 			}
 		}
-		_ = allowedQueryFields
 
-		// if where, ok := p.Args["where"].(string); ok && where != "" {
-		// 	strings.Contains(where, "LIKE")
-		// 	strings.Split(where, "like")
-		// 	if softDelete {
-		// 		query = query.Where(where + " AND deleted_at=0 ")
-		// 	} else {
-		// 		query = query.Where(where)
-		// 	}
-		// } else {
 		if softDelete {
 			query = query.Where("deleted_at=0")
 		}
-		// }
 
 		if orderBy, ok := p.Args["orderBy"].(string); ok && orderBy != "" {
 			if utils.ExistsIn(allowedOrderFields, strings.ReplaceAll(orderBy, "-", "")) {
@@ -770,12 +724,26 @@ func (ag *AutoGraphQL) generateListResolver(tableName string, meta *TableMeta) g
 			query = query.Order("id DESC")
 		}
 
+		var results []map[string]interface{}
 		err = query.Select(fields).Limit(pageSize).Offset((page - 1) * pageSize).Find(&results).Error
 		if err != nil {
 			return nil, err
 		}
 
-		return results, nil
+		var total int64
+		status := tx.Raw("SELECT (counter) FROM counters WHERE name = ?", tableName).Scan(&total)
+		if status.Error != nil {
+			if softDelete {
+				tx.Raw(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE deleted_at=0", tableName)).Scan(&total)
+			} else {
+				tx.Raw(fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)).Scan(&total)
+			}
+		}
+
+		return map[string]interface{}{
+			"items": results,
+			"total": total,
+		}, nil
 	}
 }
 
@@ -868,28 +836,82 @@ func getTransaction(ctx context.Context, db *gorm.DB) *gorm.DB {
 	return db
 }
 
+// getSelectedFields 获取查询字段
+func getSelectedFields(ctx context.Context, queryName string) ([]string, error) {
+	var reqestBody interface{}
+	if body, ok := ctx.Value("requestBody").([]byte); ok {
+		if err := json.Unmarshal(body, &reqestBody); err != nil {
+			return nil, fmt.Errorf("failed to parse json body: %v", err)
+		}
+	}
+
+	// 检查 requestBody 是否为 map 类型
+	queryMap, ok := reqestBody.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid request body")
+	}
+
+	// 获取 query 字符串
+	queryString, ok := queryMap["query"].(string)
+	if !ok {
+		return nil, fmt.Errorf("query string not found in request body")
+	}
+
+	// 提取字段
+	fields, err := extractSelectedFields(queryString, queryName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse query: %v", err)
+	}
+
+	return fields, nil
+}
+
 // extractSelectedFields 解析 GraphQL 查询字符串
-func extractSelectedFields(query string) ([]string, error) {
+func extractSelectedFields(query string, queryName string) ([]string, error) {
 	astDoc, err := parser.Parse(parser.ParseParams{
 		Source: query,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse query error: %w", err)
 	}
 
 	var fields []string
 
 	// 遍历 AST 节点
 	for _, def := range astDoc.Definitions {
-		if opDef, ok := def.(*ast.OperationDefinition); ok {
-			// 直接获取第一个查询的字段
-			if len(opDef.SelectionSet.Selections) > 0 {
-				if field, ok := opDef.SelectionSet.Selections[0].(*ast.Field); ok {
-					// 获取查询中的字段
-					for _, subSelection := range field.SelectionSet.Selections {
-						if subField, ok := subSelection.(*ast.Field); ok {
-							fields = append(fields, subField.Name.Value)
+		opDef, ok := def.(*ast.OperationDefinition)
+		if !ok {
+			continue
+		}
+
+		// 查找指定的查询
+		for _, selection := range opDef.SelectionSet.Selections {
+			field, ok := selection.(*ast.Field)
+			if !ok || field.Name.Value != queryName {
+				continue
+			}
+
+			// 如果找到指定查询，提取其字段
+			if field.SelectionSet != nil {
+				for _, subSelection := range field.SelectionSet.Selections {
+					subField, ok := subSelection.(*ast.Field)
+					if !ok {
+						continue
+					}
+
+					if subField.Name.Value == "items" {
+						// 提取 items 内的字段
+						if subField.SelectionSet != nil {
+							for _, itemSelection := range subField.SelectionSet.Selections {
+								if itemField, ok := itemSelection.(*ast.Field); ok {
+									fields = append(fields, itemField.Name.Value)
+								}
+							}
 						}
+					} else if subField.Name.Value == "total" {
+						continue
+					} else {
+						fields = append(fields, subField.Name.Value)
 					}
 				}
 			}
@@ -898,35 +920,3 @@ func extractSelectedFields(query string) ([]string, error) {
 
 	return fields, nil
 }
-
-// extractSelectedFields 解析 GraphQL 查询字符串
-// func extractSelectedFields(query string) ([]string, error) {
-// 	astDoc, err := parser.Parse(parser.ParseParams{
-// 		Source: query,
-// 	})
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	var fields []string
-
-// 	// 遍历 AST 节点
-// 	for _, def := range astDoc.Definitions {
-// 		if opDef, ok := def.(*ast.OperationDefinition); ok {
-// 			for _, selection := range opDef.SelectionSet.Selections {
-// 				if field, ok := selection.(*ast.Field); ok {
-// 					if field.Name.Value == "users" {
-// 						// 获取 users 查询中的字段
-// 						for _, subSelection := range field.SelectionSet.Selections {
-// 							if subField, ok := subSelection.(*ast.Field); ok {
-// 								fields = append(fields, subField.Name.Value)
-// 							}
-// 						}
-// 					}
-// 				}
-// 			}
-// 		}
-// 	}
-
-// 	return fields, nil
-// }
