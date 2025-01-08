@@ -67,6 +67,7 @@ type TableMeta struct {
 	Columns    []ColumnMeta
 	Relations  []RelationMeta
 	PrimaryKey string
+	Model      interface{}
 }
 
 // ColumnMeta 列元数据
@@ -175,6 +176,7 @@ func (r *TypeRegistry) RegisterTable(tableName string, model interface{}) error 
 	meta := &TableMeta{
 		Name:    tableName,
 		Columns: make([]ColumnMeta, 0),
+		Model:   model,
 	}
 
 	for _, col := range columns {
@@ -325,9 +327,15 @@ func (r *TypeRegistry) GenerateInputType(tableName string, resourceName ...strin
 	fields := graphql.InputObjectConfigFieldMap{}
 
 	for _, col := range meta.Columns {
-		if !col.IsKey && col.Tags["json"] != "-" { // 排除主键和不展示的字段
-			fields[col.Name] = &graphql.InputObjectFieldConfig{
-				Type: r.mapSQLTypeToGraphQL(col.Type, true), // 输入字段总是可空的
+		// 仅设置ctags含'u'标签的字段
+		tag := col.Tags["ctags"]
+		if tag != "" {
+			filedName := strings.Split(tag, ",")[0]
+			filedTags := strings.Split(tag, ",")[1:]
+			if filedName != "" && utils.ExistsIn(filedTags, "u") {
+				fields[col.Name] = &graphql.InputObjectFieldConfig{
+					Type: r.mapSQLTypeToGraphQL(col.Type, true), // 输入字段总是可空的
+				}
 			}
 		}
 	}
@@ -461,7 +469,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 		// 修改字段
 		if ag.config.EnableMutation {
 			// 创建
-			mutationFields["create"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			mutationFields["create"+cases.Title(language.English).String(resourceName)] = &graphql.Field{
 				Type: objectType,
 				Args: graphql.FieldConfigArgument{
 					"input": &graphql.ArgumentConfig{
@@ -472,7 +480,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 			}
 
 			// 批量创建
-			mutationFields["createBulk"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			mutationFields["create"+cases.Title(language.English).String(resourceName)+"s"] = &graphql.Field{
 				Type: graphql.NewList(objectType),
 				Args: graphql.FieldConfigArgument{
 					"inputs": &graphql.ArgumentConfig{
@@ -483,7 +491,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 			}
 
 			// 更新
-			mutationFields["update"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			mutationFields["update"+cases.Title(language.English).String(resourceName)] = &graphql.Field{
 				Type: objectType,
 				Args: graphql.FieldConfigArgument{
 					"id": &graphql.ArgumentConfig{
@@ -497,7 +505,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 			}
 
 			// 批量更新
-			mutationFields["updateBulk"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			mutationFields["update"+cases.Title(language.English).String(resourceName)+"s"] = &graphql.Field{
 				Type: graphql.NewList(objectType),
 				Args: graphql.FieldConfigArgument{
 					"inputs": &graphql.ArgumentConfig{
@@ -508,7 +516,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 			}
 
 			// 删除
-			mutationFields["delete"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			mutationFields["delete"+cases.Title(language.English).String(resourceName)] = &graphql.Field{
 				Type: graphql.Boolean,
 				Args: graphql.FieldConfigArgument{
 					"id": &graphql.ArgumentConfig{
@@ -519,7 +527,7 @@ func (ag *AutoGraphQL) buildSchema(resourceName string) error {
 			}
 
 			// 批量删除
-			mutationFields["deleteBulk"+cases.Title(language.English).String(tableName)] = &graphql.Field{
+			mutationFields["delete"+cases.Title(language.English).String(resourceName)+"s"] = &graphql.Field{
 				Type: graphql.Boolean,
 				Args: graphql.FieldConfigArgument{
 					"ids": &graphql.ArgumentConfig{
@@ -755,8 +763,10 @@ func (ag *AutoGraphQL) generateMutationResolver(operation string, tableName stri
 		switch operation {
 		case "create":
 			input := p.Args["input"].(map[string]interface{})
+			_, modelPtr, _ := utils.GetModelInfo(meta.Model)
+			utils.BindContext(input, modelPtr)
 			result := make(map[string]interface{})
-			err := tx.Table(tableName).Create(input).Scan(&result).Error
+			err := tx.Table(tableName).Create(modelPtr).Scan(&result).Error
 			return result, err
 
 		case "update":
@@ -768,7 +778,8 @@ func (ag *AutoGraphQL) generateMutationResolver(operation string, tableName stri
 
 		case "delete":
 			id := p.Args["id"]
-			err := tx.Table(tableName).Where(meta.PrimaryKey+" = ?", id).Delete(nil).Error
+			_, modelPtr, _ := utils.GetModelInfo(meta.Model)
+			err := tx.Table(tableName).Delete(modelPtr, id).Error
 			return err == nil, err
 
 		default:
@@ -787,8 +798,10 @@ func (ag *AutoGraphQL) generateBulkMutationResolver(operation string, tableName 
 			inputs := p.Args["inputs"].([]interface{})
 			var results []map[string]interface{}
 			for _, input := range inputs {
+				_, modelPtr, _ := utils.GetModelInfo(meta.Model)
+				utils.BindContext(input.(map[string]interface{}), modelPtr)
 				result := make(map[string]interface{})
-				err := tx.Table(tableName).Create(input).Scan(&result).Error
+				err := tx.Table(tableName).Create(modelPtr).Scan(&result).Error
 				if err != nil {
 					return nil, err
 				}
@@ -814,7 +827,8 @@ func (ag *AutoGraphQL) generateBulkMutationResolver(operation string, tableName 
 		case "delete":
 			ids := p.Args["ids"].([]interface{})
 			for _, id := range ids {
-				err := tx.Table(tableName).Where(meta.PrimaryKey+" = ?", id).Delete(nil).Error
+				_, modelPtr, _ := utils.GetModelInfo(meta.Model)
+				err := tx.Table(tableName).Delete(modelPtr, id).Error
 				if err != nil {
 					return false, err
 				}
